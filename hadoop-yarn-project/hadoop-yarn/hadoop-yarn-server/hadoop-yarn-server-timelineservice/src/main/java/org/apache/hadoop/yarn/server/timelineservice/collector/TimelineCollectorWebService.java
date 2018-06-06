@@ -54,6 +54,7 @@ import org.apache.hadoop.yarn.api.records.timelineservice.TimelineEntities;
 import org.apache.hadoop.yarn.api.records.timelineservice.TimelineEntity;
 import org.apache.hadoop.yarn.api.records.timelineservice.TimelineEntityType;
 import org.apache.hadoop.yarn.api.records.timelineservice.UserEntity;
+import org.apache.hadoop.yarn.server.timelineservice.metrics.TimelineCollectorMetrics;
 import org.apache.hadoop.yarn.webapp.ForbiddenException;
 import org.apache.hadoop.yarn.webapp.NotFoundException;
 
@@ -75,6 +76,8 @@ public class TimelineCollectorWebService {
       LoggerFactory.getLogger(TimelineCollectorWebService.class);
 
   private @Context ServletContext context;
+  private static final TimelineCollectorMetrics METRICS =
+      TimelineCollectorMetrics.getInstance();
 
   /**
    * Gives information about timeline collector.
@@ -147,42 +150,55 @@ public class TimelineCollectorWebService {
       @QueryParam("subappwrite") String isSubAppEntities,
       @QueryParam("appid") String appId,
       TimelineEntities entities) {
-    init(res);
-    UserGroupInformation callerUgi = getUser(req);
-    if (callerUgi == null) {
-      String msg = "The owner of the posted timeline entities is not set";
-      LOG.error(msg);
-      throw new ForbiddenException(msg);
-    }
-
+    long startTimeNs = System.nanoTime();
+    boolean succeeded = false;
+    boolean isAsync = false;
     try {
-      ApplicationId appID = parseApplicationId(appId);
-      if (appID == null) {
-        return Response.status(Response.Status.BAD_REQUEST).build();
-      }
-      NodeTimelineCollectorManager collectorManager =
-          (NodeTimelineCollectorManager) context.getAttribute(
-              NodeTimelineCollectorManager.COLLECTOR_MANAGER_ATTR_KEY);
-      TimelineCollector collector = collectorManager.get(appID);
-      if (collector == null) {
-        LOG.error("Application: "+ appId + " is not found");
-        throw new NotFoundException(); // different exception?
+      init(res);
+      UserGroupInformation callerUgi = getUser(req);
+      if (callerUgi == null) {
+        String msg = "The owner of the posted timeline entities is not set";
+        LOG.error(msg);
+        throw new ForbiddenException(msg);
       }
 
-      boolean isAsync = async != null && async.trim().equalsIgnoreCase("true");
-      if (isAsync) {
-        collector.putEntitiesAsync(processTimelineEntities(entities, appId,
-            Boolean.valueOf(isSubAppEntities)), callerUgi);
-      } else {
-        collector.putEntities(processTimelineEntities(entities, appId,
-            Boolean.valueOf(isSubAppEntities)), callerUgi);
-      }
+      try {
+        ApplicationId appID = parseApplicationId(appId);
+        if (appID == null) {
+          return Response.status(Response.Status.BAD_REQUEST).build();
+        }
+        NodeTimelineCollectorManager collectorManager =
+            (NodeTimelineCollectorManager) context.getAttribute(
+                NodeTimelineCollectorManager.COLLECTOR_MANAGER_ATTR_KEY);
+        TimelineCollector collector = collectorManager.get(appID);
+        if (collector == null) {
+          LOG.error("Application: " + appId + " is not found");
+          throw new NotFoundException(); // different exception?
+        }
 
-      return Response.ok().build();
-    } catch (Exception e) {
-      LOG.error("Error putting entities", e);
-      throw new WebApplicationException(e,
-          Response.Status.INTERNAL_SERVER_ERROR);
+        isAsync = async != null && async.trim().equalsIgnoreCase("true");
+        if (isAsync) {
+          collector.putEntitiesAsync(processTimelineEntities(entities, appId,
+              Boolean.valueOf(isSubAppEntities)), callerUgi);
+        } else {
+          collector.putEntities(processTimelineEntities(entities, appId,
+              Boolean.valueOf(isSubAppEntities)), callerUgi);
+        }
+        succeeded = true;
+        return Response.ok().build();
+      } catch (Exception e) {
+        LOG.error("Error putting entities", e);
+        throw new WebApplicationException(e,
+            Response.Status.INTERNAL_SERVER_ERROR);
+      }
+    } finally {
+      if(isAsync) {
+        METRICS.updateAsyncPutEntitiesMetrics(startTimeNs, succeeded,
+            entities.getEntities().size());
+      }else {
+        METRICS.updatePutEntitiesMetrics(startTimeNs, succeeded,
+            entities.getEntities().size());
+      }
     }
   }
 

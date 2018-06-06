@@ -58,6 +58,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptS
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.RMContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.timelineservice.RMTimelineCollectorManager;
 import org.apache.hadoop.yarn.server.timelineservice.collector.TimelineCollector;
+import org.apache.hadoop.yarn.server.timelineservice.metrics.TimelineCollectorMetrics;
 import org.apache.hadoop.yarn.util.TimelineServiceHelper;
 import org.apache.hadoop.yarn.util.timeline.TimelineUtils;
 
@@ -74,6 +75,8 @@ public class TimelineServiceV2Publisher extends AbstractSystemMetricsPublisher {
       LogFactory.getLog(TimelineServiceV2Publisher.class);
   private RMTimelineCollectorManager rmTimelineCollectorManager;
   private boolean publishContainerEvents;
+  private static final TimelineCollectorMetrics METRICS =
+      TimelineCollectorMetrics.getInstance();
 
   public TimelineServiceV2Publisher(
       RMTimelineCollectorManager timelineCollectorManager) {
@@ -446,6 +449,9 @@ public class TimelineServiceV2Publisher extends AbstractSystemMetricsPublisher {
   }
 
   private void putEntity(TimelineEntity entity, ApplicationId appId) {
+    long startTimeNs = System.nanoTime();
+    boolean succeeded = false;
+    final int timelineEntityCount = 1;
     try {
       if (LOG.isDebugEnabled()) {
         LOG.debug("Publishing the entity " + entity + ", JSON-style content: "
@@ -457,8 +463,11 @@ public class TimelineServiceV2Publisher extends AbstractSystemMetricsPublisher {
       entities.addEntity(entity);
       timelineCollector.putEntities(entities,
           UserGroupInformation.getCurrentUser());
+      succeeded = true;
     } catch (Exception e) {
       LOG.error("Error when publishing entity " + entity, e);
+    } finally {
+      METRICS.updatePutEntitiesMetrics(startTimeNs, succeeded, timelineEntityCount);
     }
   }
 
